@@ -256,7 +256,11 @@ class tr_env_gym(MujocoEnv, utils.EzPickle):
         elif desired_action == "tracking":
             obs_shape += 2 # tracking vector x, y
         
-        self.state_shape = obs_shape
+        self.state_shape =self.num_obs = self.num_privileged_obs = obs_shape
+        self.num_actions = 6
+        self.num_envs = 1
+        self.n_recon_num = 0
+        self.num_contact = 6
 
         self.intriparam_shape = 10 # 3 for friction coefficient, damping of cross, stiffness of cross
         self.intriparam_std = np.array([[self._friction_noise_dist[1]],
@@ -528,6 +532,13 @@ class tr_env_gym(MujocoEnv, utils.EzPickle):
         
         return state, observation, gt_log_intriparam, reward, terminated, False, info
 
+    def get_observations(self):
+        return self._get_obs()
+
+    def get_privileged_observations(self):
+        return self._get_obs()
+
+    
     def _get_obs(self):
         
         
