@@ -121,7 +121,7 @@ class RolloutStorage:
             raise AssertionError("Rollout buffer overflow")
         self.observations[self.step].copy_(transition.observations)
         if self.privileged_observations is not None: self.privileged_observations[self.step].copy_(transition.critic_observations)
-        self.obs_future[self.step].copy_(transition.obs_future)
+        #self.obs_future[self.step].copy_(transition.obs_future)
         self.contact_future[self.step].copy_(transition.contact_future)
         self.actions[self.step].copy_(transition.actions)
         self.rewards[self.step].copy_(transition.rewards.view(-1, 1))

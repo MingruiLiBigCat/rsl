@@ -96,9 +96,9 @@ class OnPolicyRunner:
         
 
     def learn(self, num_learning_iterations):
-        obs,_,_ = self.env.get_observations()
+        obs = self.env.get_observations()
         
-        privileged_obs,_,_ = self.env.get_privileged_observations()
+        privileged_obs = self.env.get_privileged_observations()
         critic_obs = privileged_obs if privileged_obs is not None else obs
         obs, critic_obs = torch.tensor(obs, dtype=torch.float32).unsqueeze(0).to(self.device), torch.tensor(critic_obs, dtype=torch.float32).unsqueeze(0).to(self.device)
         self.alg.actor_critic.train()
@@ -131,51 +131,56 @@ class OnPolicyRunner:
             start = time.time()
             with torch.inference_mode():
                 for i in range(self.num_steps_per_env):
+                    
                     actions = self.alg.act(obs, critic_obs)
                     obs, contact_t, obs_t, privileged_obs, rewards, glide_rewards, push_rewards, reg_reward, dones, infos = self.env.step(actions)
                     critic_obs = privileged_obs if privileged_obs is not None else obs
+                    
                     obs, contact_t, obs_t, critic_obs, rewards, glide_rewards, push_rewards, reg_reward, dones = (
-                        obs.to(self.device),
-                        contact_t.to(self.device), 
-                        obs_t.to(self.device),
-                        critic_obs.to(self.device),
-                        rewards.to(self.device),
-                        glide_rewards.to(self.device),
-                        push_rewards.to(self.device),
-                        reg_reward.to(self.device),
-                        dones.to(self.device),
+                        torch.as_tensor(obs).to(self.device),
+                        torch.as_tensor(contact_t).to(self.device),
+                        torch.as_tensor(obs_t).to(self.device),
+                        torch.as_tensor(critic_obs).to(self.device),
+                        torch.as_tensor(rewards).to(self.device),
+                        torch.as_tensor(glide_rewards).to(self.device),
+                        torch.as_tensor(push_rewards).to(self.device),
+                        torch.as_tensor(reg_reward).to(self.device),
+                        torch.as_tensor(dones).to(self.device),
                     )
+                    
                     self.alg.process_env_step(obs_t, contact_t, rewards, glide_rewards, push_rewards, reg_reward, dones, infos)
 
                     if self.log_dir is not None:
                         if "episode" in infos:
                             ep_infos.append(infos["episode"])
+                        
                         cur_reward_sum += rewards
                         glide_rewards_sum += glide_rewards
                         push_rewards_sum += push_rewards
                         reg_reward_sum += reg_reward
                         cur_episode_length += 1
                         new_ids = (dones > 0).nonzero(as_tuple=False)
-                        rewbuffer.extend(
-                            cur_reward_sum[new_ids][:, 0].cpu().numpy().tolist()
-                        )
-                        glide_rewards_buffer.extend(
-                            glide_rewards_sum[new_ids][:, 0].cpu().numpy().tolist()
-                        )
-                        push_rewards_buffer.extend(
-                            push_rewards_sum[new_ids][:, 0].cpu().numpy().tolist()
-                        )
-                        reg_rewards_buffer.extend(
-                            reg_reward_sum[new_ids][:, 0].cpu().numpy().tolist()
-                        )
-                        lenbuffer.extend(
-                            cur_episode_length[new_ids][:, 0].cpu().numpy().tolist()
-                        )
-                        cur_reward_sum[new_ids] = 0
-                        glide_rewards_sum[new_ids] = 0
-                        push_rewards_sum[new_ids] = 0
-                        reg_reward_sum[new_ids] = 0
-                        cur_episode_length[new_ids] = 0
+                        if new_ids.numel() > 0:
+                            rewbuffer.extend(
+                                cur_reward_sum[new_ids][:, 0].cpu().numpy().tolist()
+                            )
+                            glide_rewards_buffer.extend(
+                                glide_rewards_sum[new_ids][:, 0].cpu().numpy().tolist()
+                            )
+                            push_rewards_buffer.extend(
+                                push_rewards_sum[new_ids][:, 0].cpu().numpy().tolist()
+                            )
+                            reg_rewards_buffer.extend(
+                                reg_reward_sum[new_ids][:, 0].cpu().numpy().tolist()
+                            )
+                            lenbuffer.extend(
+                                cur_episode_length[new_ids][:, 0].cpu().numpy().tolist()
+                            )
+                            cur_reward_sum[new_ids] = 0
+                            glide_rewards_sum[new_ids] = 0
+                            push_rewards_sum[new_ids] = 0
+                            reg_reward_sum[new_ids] = 0
+                            cur_episode_length[new_ids] = 0
 
                 stop = time.time()
                 collection_time = stop - start

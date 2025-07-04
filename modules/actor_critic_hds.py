@@ -36,6 +36,41 @@ from torch.distributions import Beta
 from modules.vae import VAE
 
 class ActorCriticHDS(nn.Module):
+    """
+    Actor-Critic model with Hierarchical Discrete Structure (HDS) for robotic control.
+    
+    Key Components:
+    1. Discrete Hybrid Automata (DHA): Classifies modes from observations
+    2. Transition Dynamics (TsDyn): Set of VAEs for mode-specific temporal representations
+    3. Policy Network (Actor): Generates Beta-distributed actions
+    4. Value Networks (Critics): Multiple value estimators
+    
+    Tensor Shapes:
+    - Input Observations: (batch_size, num_actor_obs)
+    - DHA Output: 
+        mode_latent: (batch_size, num_modes) one-hot encoded
+        prob: (batch_size, num_modes) probability distribution
+    - TsDyn Output (representation): (batch_size, tsdyn_latent_dims)
+    - Actor Input: (batch_size, tsdyn_latent_dims + num_proprio)
+    - Actor Output: (batch_size, num_actions*2)  # alpha and beta parameters
+    - Critic Input: (batch_size, num_critic_obs)
+    - Critic Output: (batch_size, 1)
+    
+    Args:
+        num_actor_obs (int): Dimension of actor observations
+        num_critic_obs (int): Dimension of critic observations
+        num_actions (int): Dimension of action space
+        num_proprio (int): Dimension of proprioceptive features
+        num_recon (int): Dimension of reconstructed features in VAEs
+        history_len (int): Temporal window length for VAEs
+        num_modes (int): Number of discrete modes for DHA
+        actor_hidden_dims (list[int]): Actor MLP layer dimensions
+        critic_hidden_dims (list[int]): Critic MLP layer dimensions
+        dha_hidden_dims (list[int]): DHA MLP layer dimensions
+        tsdyn_hidden_dims (list[int]): VAE encoder/decoder dimensions
+        tsdyn_latent_dims (int): Latent dimension for VAEs
+        cfg (object): Configuration object
+    """
     is_recurrent = False
     def __init__(self,  num_actor_obs,
                         num_critic_obs,
@@ -58,6 +93,7 @@ class ActorCriticHDS(nn.Module):
         self.num_proprio = num_proprio
         self.num_recon = num_recon
         self.history_len = history_len
+        self.clip_range = 0.35
 
         num_his_obs = num_actor_obs
         mlp_input_dim_a = tsdyn_latent_dims + self.num_proprio
@@ -170,24 +206,59 @@ class ActorCriticHDS(nn.Module):
 
 
     def reset(self, dones=None):
+        """Resets internal states (not used in this model)."""
         pass
 
     def forward(self):
+        """Not implemented (use specific methods instead)."""
         raise NotImplementedError
     
     @property
     def action_mean(self):
+        """
+        Mean of current action distribution.
+        
+        Returns:
+            tensor: (batch_size, num_actions)
+        """
         return self.distribution.mean
 
     @property
     def action_std(self):
+        """
+        Standard deviation of current action distribution.
+        
+        Returns:
+            tensor: (batch_size, num_actions)
+        """
         return self.distribution.stddev
     
     @property
     def entropy(self):
+        """
+        Entropy of current action distribution.
+        
+        Returns:
+            tensor: (batch_size,)
+        """
         return self.distribution.entropy().sum(dim=-1)
 
     def update_distribution(self, observations):
+        """
+        Updates the action distribution based on current observations.
+        
+        Processing Flow:
+        1. DHA: observations (batch_size, num_actor_obs) → mode_latent (batch_size, num_modes)
+        2. TsDyn: Each VAE processes observations → representations (batch_size, tsdyn_latent_dims)
+        3. Weighted combination: (batch_size, 1, num_modes) @ (batch_size, num_modes, tsdyn_latent_dims)
+                                → (batch_size, tsdyn_latent_dims)
+        4. Actor: [proprio (batch_size, num_proprio), representation] → 
+                 action parameters (batch_size, num_actions*2)
+        5. Creates Beta distribution from parameters
+        
+        Args:
+            observations (tensor): Input tensor of shape (batch_size, num_actor_obs)
+        """
         assert not torch.isnan(observations).any(), "Observations contain NaN values!"
         # get one hot latent
         mode_latent, prob = self.DHA(observations)
@@ -207,17 +278,53 @@ class ActorCriticHDS(nn.Module):
         self.distribution = Beta(alpha, beta)
 
     def act(self, observations, **kwargs):
+        """
+        Samples actions from current distribution.
+        
+        Args:
+            observations (tensor): Shape (batch_size, num_actor_obs)
+        
+        Returns:
+            tensor: Actions in range [-clip_range, clip_range], shape (batch_size, num_actions)
+        """
         self.update_distribution(observations)
-        return self.distribution.sample() * self.cfg.normalization.clip_actions * 2 - self.cfg.normalization.clip_actions
+        return self.distribution.sample() * self.clip_range * 2 - self.clip_range
     
     def get_actions_log_prob(self, actions):
+        """
+        Computes log probability of given actions under current distribution.
+        
+        Args:
+            actions (tensor): Shape (batch_size, num_actions) in range [-clip_range, clip_range]
+        
+        Returns:
+            tensor: Log probabilities of shape (batch_size,)
+        """
         actions = torch.clamp(actions, min=-3+1e-6, max=3-1e-6)
-        original_actions = (actions + self.cfg.normalization.clip_actions) / (self.cfg.normalization.clip_actions * 2)
+        original_actions = (actions + self.clip_range) / (self.clip_range * 2)
         log_prob = self.distribution.log_prob(original_actions).sum(dim=-1)
-        log_prob -= torch.log(torch.tensor(self.cfg.normalization.clip_actions * 2))
+        log_prob -= torch.log(torch.tensor(self.clip_range * 2))
         return log_prob
 
     def act_inference(self, observations):
+        """
+        Action prediction without sampling (deterministic mode).
+        
+        Processing Flow:
+        1. DHA: observations → mode_latent (batch_size, num_modes)
+        2. TsDyn: representations (batch_size, num_modes, tsdyn_latent_dims)
+        3. Weighted combination → (batch_size, tsdyn_latent_dims)
+        4. Actor: mean action (batch_size, num_actions*2)
+        5. Transforms to range [-3, 3] via alpha/(alpha+beta)*6 - 3
+        
+        Args:
+            observations (tensor): Shape (batch_size, num_actor_obs)
+        
+        Returns:
+            tuple: 
+                actions: (batch_size, num_actions) in range [-3, 3]
+                mode_latent: (batch_size, num_modes)
+        """
         mode_latent, prob = self.DHA(observations)
         representation_list = []
         for i, sub_net in enumerate(self.TsDyn_modules):
@@ -231,6 +338,15 @@ class ActorCriticHDS(nn.Module):
         return (alpha/(alpha + beta))*6 - 3, mode_latent
 
     def evaluate(self, critic_observations, **kwargs):
+        """
+        Evaluates state value using multiple critics.
+        
+        Args:
+            critic_observations (tensor): Shape (batch_size, num_critic_obs)
+        
+        Returns:
+            tuple: Four value tensors each of shape (batch_size, 1)
+        """
         value = self.critic(critic_observations)
         glide_value = self.glide_critic(critic_observations)
         push_value = self.push_critic(critic_observations)

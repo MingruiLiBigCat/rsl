@@ -175,6 +175,7 @@ class PPO_HDS:
                 recon_loss = F.mse_loss(recon_x, obs_future_batch, reduction='none')
                 recon_loss = recon_loss.sum(dim=1).unsqueeze(1).unsqueeze(2)
                 recon_loss_list.append(recon_loss)
+                print(recon_contact.shape, contact_future_batch.shape,obs_batch.shape)
                 recon_contact_loss = F.binary_cross_entropy(recon_contact, contact_future_batch, reduction='none')
                 recon_contact_loss = recon_contact_loss.sum(dim=1).unsqueeze(1).unsqueeze(2)  
                 recon_contact_loss_list.append(recon_contact_loss)

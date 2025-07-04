@@ -10,7 +10,7 @@ class VAE(nn.Module):
                  hidden_dims, 
                  latent_dim = 16,
                  history_len = 20,
-                 feet_contact_dim = 3,
+                 feet_contact_dim = 6,
                  kl_w = 0.1,
                  prior_mu=None):
         """
@@ -53,25 +53,76 @@ class VAE(nn.Module):
 
 
     def encode(self, x):
+        """
+        Encode input into latent distribution parameters.
+        
+        Args:
+            x (tensor): Input tensor of shape (batch_size, input_dim)
+        
+        Returns:
+            mu (tensor): Latent mean of shape (batch_size, latent_dim)
+            logvar (tensor): Log variance of shape (batch_size, latent_dim)
+        """
         h = self.encoder(x)
         mu = self.fc_mu(h)
         logvar = self.fc_logvar(h)
         return mu, logvar
 
     def reparameterize(self, mu, logvar):
+        """
+        Reparameterization trick for differentiable sampling.
+        
+        Args:
+            mu (tensor): Latent mean of shape (batch_size, latent_dim)
+            logvar (tensor): Log variance of shape (batch_size, latent_dim)
+        
+        Returns:
+            z (tensor): Sampled latent vector of shape (batch_size, latent_dim)
+        """
         std = torch.exp(0.5 * logvar)
         eps = torch.randn_like(std)
         return mu + eps * std
     
     def get_representation(self, x):
+        """
+        Get latent representation without reconstruction.
+        
+        Args:
+            x (tensor): Input tensor of shape (batch_size, input_dim)
+        
+        Returns:
+            z (tensor): Sampled latent vector of shape (batch_size, latent_dim)
+        """
         mu, logvar = self.encode(x)
         z = self.reparameterize(mu, logvar)
         return z
 
     def decode(self, z):
+        """
+        Reconstruct outputs from latent vector.
+        
+        Args:
+            z (tensor): Latent vector of shape (batch_size, latent_dim)
+        
+        Returns:
+            recon_x (tensor): Main reconstruction of shape (batch_size, output_dims)
+            recon_contact (tensor): Foot contact probabilities of shape (batch_size, feet_contact_dim)
+        """
         return self.decoder(z), self.FC_decoder(z)
 
     def forward(self, x):
+        """
+        Full VAE forward pass.
+        
+        Args:
+            x (tensor): Input tensor of shape (batch_size, input_dim)
+        
+        Returns:
+            recon_x (tensor): Main reconstruction of shape (batch_size, output_dims)
+            recon_contact (tensor): Foot contact probabilities of shape (batch_size, feet_contact_dim)
+            mu (tensor): Latent mean of shape (batch_size, latent_dim)
+            logvar (tensor): Log variance of shape (batch_size, latent_dim)
+        """
         mu, logvar = self.encode(x)
         z = self.reparameterize(mu, logvar)
         recon_x, recon_contact= self.decode(z)

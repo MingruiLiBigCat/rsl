@@ -95,6 +95,7 @@ def train(args=None):
                                     desired_action = "straight",
                                     desired_direction = 1
                                     )
+    env.reset_model()
     runner = OnPolicyRunner(env, 
                                 train_cfg_dict, 
                                 log_dir, 

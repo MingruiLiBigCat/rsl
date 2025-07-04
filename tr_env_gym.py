@@ -1,5 +1,5 @@
 import numpy as np
-
+import torch
 from gym import utils
 from gym.envs.mujoco import MujocoEnv
 from gym.spaces import Box
@@ -46,7 +46,7 @@ class tr_env_gym(MujocoEnv, utils.EzPickle):
         max_reset_heading = 2*np.pi,
         reward_delay_seconds = 0.02, # 0.5,
         contact_with_self_penalty = 0.0,
-        robot_type = "w",
+        robot_type = "j",
         tendon_reset_mean_w = 0.05,
         tendon_reset_stdev_w = 0.0,
         tendon_max_length_w = 0.05,
@@ -164,7 +164,7 @@ class tr_env_gym(MujocoEnv, utils.EzPickle):
         self._max_reset_heading = max_reset_heading
         self._robot_type = robot_type
         
-        self._oripoint = None
+        self._oripoint = [0.,0.]
         self._threshold_waypt = threshold_waypt
         self._ditch_reward_max = ditch_reward_max
         self._waypt_reward_amplitude = waypt_reward_amplitude
@@ -256,7 +256,7 @@ class tr_env_gym(MujocoEnv, utils.EzPickle):
         elif desired_action == "tracking":
             obs_shape += 2 # tracking vector x, y
         
-        self.state_shape =self.num_obs = self.num_privileged_obs = obs_shape
+        self.state_shape =obs_shape
         self.num_actions = 6
         self.num_envs = 1
         self.n_recon_num = 0
@@ -275,7 +275,7 @@ class tr_env_gym(MujocoEnv, utils.EzPickle):
                                          [self._mass_noise_dist[1]]])
 
         observation_space = Box(
-            low=-np.inf, high=np.inf, shape=(obs_shape,), dtype=np.float64
+            low=-np.inf, high=np.inf, shape=(obs_shape,), dtype=np.float32
         )
         frame_skip = 20
         MujocoEnv.__init__(
@@ -283,15 +283,19 @@ class tr_env_gym(MujocoEnv, utils.EzPickle):
         )
         self._reward_delay_steps = int(reward_delay_seconds/self.dt)
         self._heading_buffer = deque()
+        self.num_obs = self.num_privileged_obs = frame_skip*obs_shape
+        self.observation_buffer = np.zeros((frame_skip,obs_shape),dtype=np.float32)
 
     @property
     def healthy_reward(self):
         return (
-            float(self.is_healthy or self._terminate_when_unhealthy)
+            np.float32(self.is_healthy or self._terminate_when_unhealthy)
             * self._healthy_reward
         )
 
     def control_cost(self, action, tendon_length_6):
+        if torch.is_tensor(action):
+            action = action.cpu().numpy() 
         if self._robot_type == "j":
             control_cost = self._ctrl_cost_weight * np.sum(np.square(action + 0.5 - tendon_length_6)) # 0.5 is the initial spring length for 6 tendons
         elif self._robot_type == "w":
@@ -359,11 +363,16 @@ class tr_env_gym(MujocoEnv, utils.EzPickle):
         if self._robot_type == "w":
             self.do_simulation(action, self.frame_skip)
         elif self._robot_type == "j":
-            self.data.ctrl[:] = action.copy()
-            for _ in range(self.frame_skip):
+            if torch.is_tensor(filtered_action):
+                self.data.ctrl[:] = filtered_action.cpu().numpy()  # Convert to NumPy array
+            else:
+                self.data.ctrl[:] = filtered_action.copy() 
+            for frame_idx in range(self.frame_skip):
                 crt_min_force = np.minimum(267 * (-self.data.actuator_velocity / 0.17 - 1), -4 * np.ones(6))
                 crt_min_force = np.maximum(crt_min_force, -267* np.ones(6))
                 self.model.actuator_forcerange[:, 0] = crt_min_force
+                obs,_,_ = self._get_obs()
+                self.observation_buffer[frame_idx,:] = obs
                 mujoco.mj_step(self.model, self.data)
             mujoco.mj_rnePostConstraint(self.model, self.data)
         
@@ -439,7 +448,6 @@ class tr_env_gym(MujocoEnv, utils.EzPickle):
             #                     (np.sqrt((x_position_after-x_position_before)**2 + \
             #                             (y_position_after - y_position_before)**2) *\
             #                     np.cos(psi_diff)/ self.dt) * self._forrew_rate
-
             before_potential = self._straight_potential(xy_position_before)
             after_potential = self._straight_potential(xy_position_after)
             forward_reward = after_potential - before_potential
@@ -530,13 +538,13 @@ class tr_env_gym(MujocoEnv, utils.EzPickle):
         if self.render_mode == "human":
             self.render()
         
-        return state, observation, gt_log_intriparam, reward, terminated, False, info
+        return self.observation_buffer.reshape(1,-1), np.zeros((6),dtype=np.float32),self.observation_buffer.reshape(1,-1), self.observation_buffer.reshape(1,-1), reward, reward,0,0, terminated, info
 
     def get_observations(self):
-        return self._get_obs()
+        return self.observation_buffer.flatten()
 
     def get_privileged_observations(self):
-        return self._get_obs()
+        return self.observation_buffer.flatten()
 
     
     def _get_obs(self):
@@ -802,7 +810,8 @@ class tr_env_gym(MujocoEnv, utils.EzPickle):
     def _action_filter(self, action, last_action):
         k_FILTER = 1.0
         vel_constraint = self._tendon_max_vel
-
+        if torch.is_tensor(action):
+            action = action.cpu().numpy()
         del_action = np.clip(action - last_action, -vel_constraint*self.dt, vel_constraint*self.dt)
         # del_action = np.clip(k_FILTER*(action - last_action)*self.dt, -vel_constraint*self.dt, vel_constraint*self.dt)
         # del_action = k_FILTER*(action - last_action)*self.dt

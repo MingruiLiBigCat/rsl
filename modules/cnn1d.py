@@ -2,7 +2,35 @@
 import torch.nn as nn
 
 class CNN1dEstimator(nn.Module):
+    """
+    1D Convolutional Neural Network for processing sequential data.
+    
+    Attributes:
+        activation_fn: Activation function used throughout the network
+        tsteps: Fixed length of input sequences (temporal steps)
+        encoder: Linear projection layer that expands feature dimensions
+        conv_layers: 1D convolutional blocks configured for specific sequence lengths
+        linear_output: Final processing layer producing the output
+        
+    Args:
+        activation_fn: Activation function (e.g., nn.ReLU)
+        input_size: Number of features per timestep
+        tsteps: Number of timesteps in input sequences (must be 10, 20, or 50)
+        output_size: Dimensionality of the output vector
+        tanh_encoder_output: Unused in current implementation (retained for compatibility)
+    """
     def __init__(self, activation_fn, input_size, tsteps, output_size, tanh_encoder_output=False):
+        """
+        Initializes CNN1dEstimator with configurable architecture components.
+        
+        The network architecture dynamically adapts to different sequence lengths (tsteps):
+        - For tsteps=50: Uses 3 convolutional layers with stride reduction
+        - For tsteps=20: Uses 2 convolutional layers with stride reduction
+        - For tsteps=10: Uses 2 convolutional layers with minimal reduction
+        
+        Raises:
+            ValueError: If tsteps is not 10, 20, or 50
+        """
         super(CNN1dEstimator, self).__init__()
         self.activation_fn = activation_fn
         self.tsteps = tsteps
@@ -37,6 +65,18 @@ class CNN1dEstimator(nn.Module):
         
 
     def forward(self, obs):
+        """
+        Forward pass processing:
+        
+        Input shape: (batch_size, tsteps, input_size)
+        Output shape: (batch_size, output_size)
+        
+        Args:
+            obs: Input tensor containing sequential data
+        
+        Returns:
+            Processed output tensor
+        """
         # nd * T * n_proprio
         nd = obs.shape[0]
         T = self.tsteps
